@@ -207,19 +207,20 @@ function CalendrierRetrait({
 // ─── Page principale ──────────────────────────────────────────────────────────
 
 export default function CommandePage() {
-  const [produits, setProduits]       = useState<any[]>([])
-  const [panier, setPanier]           = useState<Record<string, number>>({})
-  const [dateRetrait, setDateRetrait] = useState('')
-  const [dateMinStr, setDateMinStr]   = useState('')
-  const [fermetures, setFermetures]   = useState<Fermeture[]>([])
-  const [nom, setNom]                 = useState('')
-  const [prenom, setPrenom]           = useState('')
-  const [email, setEmail]             = useState('')
-  const [telephone, setTelephone]     = useState('')
-  const [notes, setNotes]             = useState('')
-  const [recurrente, setRecurrente]   = useState(false)
-  const [loading, setLoading]         = useState(false)
-  const [etape, setEtape]             = useState<'panier' | 'infos' | 'confirmation'>('panier')
+  const [produits, setProduits]           = useState<any[]>([])
+  const [panier, setPanier]               = useState<Record<string, number>>({})
+  const [dateRetrait, setDateRetrait]     = useState('')
+  const [dateMinStr, setDateMinStr]       = useState('')
+  const [fermetures, setFermetures]       = useState<Fermeture[]>([])
+  const [nom, setNom]                     = useState('')
+  const [prenom, setPrenom]               = useState('')
+  const [email, setEmail]                 = useState('')
+  const [telephone, setTelephone]         = useState('')
+  const [notes, setNotes]                 = useState('')
+  const [recurrente, setRecurrente]       = useState(false)
+  const [clientVerifie, setClientVerifie] = useState(false)  // true si statut vérifié ou vip
+  const [loading, setLoading]             = useState(false)
+  const [etape, setEtape]                 = useState<'panier' | 'infos' | 'confirmation'>('panier')
   const supabase = createClient()
   const router   = useRouter()
 
@@ -229,11 +230,12 @@ export default function CommandePage() {
 
     supabase.from('produits').select('*').eq('actif', true).then(({ data }) => setProduits(data ?? []))
 
-    // Charger fermetures + paramètres en parallèle
+    // Charger fermetures + paramètres + statut client connecté en parallèle
     Promise.all([
       supabase.from('fermetures').select('id, type, date, jour_semaine'),
       supabase.from('parametres').select('heure_blocage_semaine, heure_blocage_weekend').single(),
-    ]).then(([{ data: ferm }, { data: params }]) => {
+      supabase.auth.getUser(),
+    ]).then(async ([{ data: ferm }, { data: params }, { data: authData }]) => {
       const fermeturesList = (ferm ?? []) as Fermeture[]
       setFermetures(fermeturesList)
 
@@ -244,6 +246,18 @@ export default function CommandePage() {
 
       setDateMinStr(formatDate(premiereDateDispo(fermeturesList, offset)))
       setDateRetrait(formatDate(premiereDispo))
+
+      // Vérifier si le client connecté est vérifié ou vip
+      if (authData.user) {
+        const { data: clientData } = await supabase
+          .from('clients')
+          .select('statut')
+          .eq('user_id', authData.user.id)
+          .single()
+        if (clientData && (clientData.statut === 'verifie' || clientData.statut === 'vip')) {
+          setClientVerifie(true)
+        }
+      }
     })
   }, [])
 
@@ -421,21 +435,35 @@ export default function CommandePage() {
               </div>
 
               {/* Toggle récurrence */}
-              <div
-                onClick={() => setRecurrente(!recurrente)}
-                style={{ marginBottom: '16px', padding: '14px 16px', background: recurrente ? '#f0fdf4' : '#f9fafb', borderRadius: '12px', border: `2px solid ${recurrente ? '#7CBF3A' : '#e5e7eb'}`, cursor: 'pointer', display: 'flex', alignItems: 'flex-start', gap: '12px', transition: 'all 0.15s' }}>
-                <div style={{ width: '22px', height: '22px', borderRadius: '4px', border: `2px solid ${recurrente ? '#7CBF3A' : '#d1d5db'}`, background: recurrente ? '#7CBF3A' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: '1px' }}>
-                  {recurrente && <span style={{ color: '#1C2B1A', fontWeight: 900, fontSize: '14px', lineHeight: 1 }}>✓</span>}
-                </div>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: '14px', color: recurrente ? '#166534' : '#374151' }}>
-                    🔄 Commande récurrente (chaque semaine)
+              {clientVerifie ? (
+                <div
+                  onClick={() => setRecurrente(!recurrente)}
+                  style={{ marginBottom: '16px', padding: '14px 16px', background: recurrente ? '#f0fdf4' : '#f9fafb', borderRadius: '12px', border: `2px solid ${recurrente ? '#7CBF3A' : '#e5e7eb'}`, cursor: 'pointer', display: 'flex', alignItems: 'flex-start', gap: '12px', transition: 'all 0.15s' }}>
+                  <div style={{ width: '22px', height: '22px', borderRadius: '4px', border: `2px solid ${recurrente ? '#7CBF3A' : '#d1d5db'}`, background: recurrente ? '#7CBF3A' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: '1px' }}>
+                    {recurrente && <span style={{ color: '#1C2B1A', fontWeight: 900, fontSize: '14px', lineHeight: 1 }}>✓</span>}
                   </div>
-                  <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '3px' }}>
-                    Votre commande sera préparée toutes les semaines. Vous pourrez la suspendre depuis votre espace client. <strong style={{ color: '#3B6D11' }}>Activation sous 24h par la boulangerie.</strong>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '14px', color: recurrente ? '#166534' : '#374151' }}>
+                      🔄 Commande récurrente (chaque semaine)
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '3px' }}>
+                      Votre commande sera préparée toutes les semaines. Vous pourrez la suspendre depuis votre espace client.
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div style={{ marginBottom: '16px', padding: '14px 16px', background: '#f9fafb', borderRadius: '12px', border: '2px solid #e5e7eb', display: 'flex', alignItems: 'flex-start', gap: '12px', opacity: 0.7 }}>
+                  <div style={{ width: '22px', height: '22px', borderRadius: '4px', border: '2px solid #d1d5db', background: '#f3f4f6', flexShrink: 0, marginTop: '1px' }} />
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '14px', color: '#9ca3af' }}>
+                      🔄 Commande récurrente (chaque semaine)
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '3px' }}>
+                      🔒 Disponible après votre premier retrait en boutique. Passez votre première commande ponctuelle, et cette option se débloquera automatiquement.
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Calendrier retrait */}
               <div style={{ marginBottom: '16px' }}>

@@ -75,27 +75,16 @@ export default function CommandesPage() {
   }
 
   async function changerStatut(commandeId: string, nouveauStatut: string) {
-    const commande = commandes.find(c => c.id === commandeId)
-    if (!commande) return
-
-    // 🔒 Protection : récupérée est irréversible (sauf vers annulée avec confirmation)
-    if (commande.statut === 'recuperee' && nouveauStatut !== 'annulee') return
-    if (commande.statut === 'recuperee' && nouveauStatut === 'annulee') {
-      setConfirming({ id: commandeId, action: 'annulee' })
-      return
-    }
-
-    // Demander confirmation pour "récupérée"
+    // Confirmation requise uniquement pour "récupérée" et "annulée"
     if (nouveauStatut === 'recuperee') {
       setConfirming({ id: commandeId, action: 'recuperee' })
       return
     }
-    // Demander confirmation pour "annulée"
     if (nouveauStatut === 'annulee') {
       setConfirming({ id: commandeId, action: 'annulee' })
       return
     }
-
+    // Tous les autres changements (y compris revenir en arrière depuis récupérée) : direct
     await effectuerChangement(commandeId, nouveauStatut)
   }
 
@@ -162,8 +151,8 @@ export default function CommandesPage() {
         <ModalConfirm
           texte={
             confirming.action === 'recuperee'
-              ? 'Confirmer la récupération de cette commande ?\nCette action est définitive et passera le client en "vérifié".'
-              : 'Confirmer l\'annulation de cette commande ? Cette action ne peut pas être défaite.'
+              ? 'Confirmer que cette commande a été récupérée ?\nLe client passera automatiquement en "vérifié". Vous pourrez revenir en arrière si besoin.'
+              : 'Confirmer l\'annulation de cette commande ? Vous pourrez la remettre en attente si c\'est une erreur.'
           }
           onNon={() => setConfirming(null)}
           onOui={() => effectuerChangement(confirming.id, confirming.action)}
@@ -214,7 +203,7 @@ export default function CommandesPage() {
           {commandesFiltrees.map(c => {
             const meta       = STATUT_META[c.statut] ?? STATUT_META['en_attente']
             const ouvert     = detailOuvert === c.id
-            const verrouillee = c.statut === 'recuperee' || c.statut === 'annulee'
+            // verrouillee supprimé : retour en arrière toujours possible
             const enCours    = changementStatut === c.id
             const auj        = estAujourdHui(c.date_retrait)
             const passe      = estPasse(c.date_retrait) && c.statut !== 'recuperee'
@@ -354,34 +343,36 @@ export default function CommandesPage() {
                       </div>
 
                       {/* Progression statut */}
-                      {!verrouillee && (
+                      {c.statut !== 'annulee' && (
                         <div style={{ minWidth: '200px' }}>
-                          <p style={{ fontSize: '12px', fontWeight: 700, color: '#6b7280', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Avancement</p>
+                          <p style={{ fontSize: '12px', fontWeight: 700, color: '#6b7280', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Modifier le statut</p>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                             {STATUTS_PROGRESSION.map((s) => {
-                              const sm        = STATUT_META[s]
-                              const courant   = c.statut === s
-                              const passe     = STATUTS_PROGRESSION.indexOf(s) < STATUTS_PROGRESSION.indexOf(c.statut as any)
-                              const estBloq   = s === 'recuperee' // toujours via bouton direct
+                              const sm      = STATUT_META[s]
+                              const courant = c.statut === s
+                              const aVenir  = STATUTS_PROGRESSION.indexOf(s) > STATUTS_PROGRESSION.indexOf(c.statut as any)
+                              const estRecup = s === 'recuperee'
                               return (
                                 <button key={s}
-                                  onClick={() => !courant && !passe && !estBloq && changerStatut(c.id, s)}
+                                  onClick={() => !courant && changerStatut(c.id, s)}
                                   style={{
                                     display: 'flex', alignItems: 'center', gap: '8px',
-                                    padding: '7px 10px', borderRadius: '8px', border: `1px solid ${courant ? sm.border : '#e5e7eb'}`,
-                                    background: courant ? sm.bg : passe ? '#f9fafb' : 'white',
-                                    color: courant ? sm.color : passe ? '#9ca3af' : '#374151',
+                                    padding: '7px 10px', borderRadius: '8px',
+                                    border: `1px solid ${courant ? sm.border : '#e5e7eb'}`,
+                                    background: courant ? sm.bg : 'white',
+                                    color: courant ? sm.color : aVenir ? '#374151' : '#9ca3af',
                                     fontSize: '12px', fontWeight: courant ? 700 : 400,
-                                    cursor: courant || passe || estBloq ? 'default' : 'pointer',
+                                    cursor: courant ? 'default' : 'pointer',
                                     textAlign: 'left',
                                   }}>
-                                  <span style={{ fontSize: '14px' }}>{passe ? '✓' : courant ? sm.emoji : '○'}</span>
+                                  <span style={{ fontSize: '14px' }}>{courant ? sm.emoji : aVenir ? '○' : '↩'}</span>
                                   {sm.label}
-                                  {estBloq && !courant && <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#9ca3af' }}>via bouton ↑</span>}
+                                  {!courant && !aVenir && <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#9ca3af' }}>revenir</span>}
+                                  {estRecup && !courant && aVenir && <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#6b7280' }}>confirmation</span>}
                                 </button>
                               )
                             })}
-                            {/* Annuler toujours disponible */}
+                            {/* Annuler */}
                             <button
                               onClick={() => changerStatut(c.id, 'annulee')}
                               style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px', borderRadius: '8px', border: '1px solid #fca5a5', background: '#fff', color: '#dc2626', fontSize: '12px', cursor: 'pointer', marginTop: '4px' }}>
@@ -391,23 +382,15 @@ export default function CommandesPage() {
                         </div>
                       )}
 
-                      {/* Commande récupérée — verrouillée */}
-                      {c.statut === 'recuperee' && (
-                        <div style={{ minWidth: '200px', background: '#f0fdf4', borderRadius: '10px', padding: '14px', border: '1px solid #86efac' }}>
-                          <p style={{ fontSize: '13px', fontWeight: 700, color: '#166534', margin: '0 0 6px' }}>🔒 Commande récupérée</p>
-                          <p style={{ fontSize: '12px', color: '#4ade80', margin: '0 0 10px' }}>Cette commande est finalisée. Le statut est verrouillé.</p>
-                          <button onClick={() => changerStatut(c.id, 'annulee')}
-                            style={{ width: '100%', padding: '7px', background: 'white', border: '1px solid #fca5a5', borderRadius: '7px', color: '#dc2626', fontSize: '12px', cursor: 'pointer' }}>
-                            ✕ Annuler quand même
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Commande annulée */}
+                      {/* Commande annulée — remettre en attente possible */}
                       {c.statut === 'annulee' && (
                         <div style={{ minWidth: '200px', background: '#fef2f2', borderRadius: '10px', padding: '14px', border: '1px solid #fca5a5' }}>
-                          <p style={{ fontSize: '13px', fontWeight: 700, color: '#991b1b', margin: '0 0 6px' }}>🔒 Commande annulée</p>
-                          <p style={{ fontSize: '12px', color: '#f87171', margin: 0 }}>Cette commande a été annulée et ne peut plus être modifiée.</p>
+                          <p style={{ fontSize: '13px', fontWeight: 700, color: '#991b1b', margin: '0 0 6px' }}>✕ Commande annulée</p>
+                          <p style={{ fontSize: '12px', color: '#f87171', margin: '0 0 10px' }}>Annulée par erreur ?</p>
+                          <button onClick={() => effectuerChangement(c.id, 'en_attente')}
+                            style={{ width: '100%', padding: '7px', background: 'white', border: '1px solid #fbbf24', borderRadius: '7px', color: '#854d0e', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}>
+                            ↩ Remettre en attente
+                          </button>
                         </div>
                       )}
                     </div>
