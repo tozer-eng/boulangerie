@@ -217,6 +217,7 @@ export default function CommandePage() {
   const [email, setEmail]             = useState('')
   const [telephone, setTelephone]     = useState('')
   const [notes, setNotes]             = useState('')
+  const [recurrente, setRecurrente]   = useState(false)
   const [loading, setLoading]         = useState(false)
   const [etape, setEtape]             = useState<'panier' | 'infos' | 'confirmation'>('panier')
   const supabase = createClient()
@@ -267,7 +268,8 @@ export default function CommandePage() {
   }, [dateRetrait])
 
   async function passerCommande() {
-    if (!nom || !prenom || !email || !telephone || !dateRetrait) return
+    if (!nom || !prenom || !email || !telephone) return
+    if (!recurrente && !dateRetrait) return
     setLoading(true)
 
     let clientId: string
@@ -287,11 +289,12 @@ export default function CommandePage() {
     const { data: commande } = await supabase
       .from('commandes').insert({
         client_id: clientId,
-        type: 'ponctuelle',
+        type: recurrente ? 'recurrente' : 'ponctuelle',
         statut: 'en_attente',
         statut_paiement: 'en_attente',
         mode_paiement: 'en_magasin',
-        date_retrait: dateRetrait,
+        date_retrait: dateRetrait || null,
+        recurence_validee: false,
         montant_total: total,
         notes: notes || null,
       }).select('id').single()
@@ -320,9 +323,16 @@ export default function CommandePage() {
           Commande confirmée !
         </h1>
         <p style={{ color: '#6b7280', marginBottom: '8px' }}>Merci {prenom} ! Votre commande a bien été enregistrée.</p>
-        <p style={{ color: '#3B6D11', fontWeight: 600, marginBottom: '24px' }}>
-          À récupérer le {labelDateRetrait}
-        </p>
+        {recurrente ? (
+          <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '10px', padding: '12px 16px', marginBottom: '24px' }}>
+            <p style={{ color: '#166534', fontWeight: 700, margin: '0 0 4px' }}>🔄 Commande récurrente soumise</p>
+            <p style={{ color: '#6b7280', fontSize: '13px', margin: 0 }}>La boulangerie va l'activer sous 24h. Vous recevrez une confirmation.{dateRetrait ? ` Premier retrait le ${labelDateRetrait}.` : ''}</p>
+          </div>
+        ) : (
+          <p style={{ color: '#3B6D11', fontWeight: 600, marginBottom: '24px' }}>
+            À récupérer le {labelDateRetrait}
+          </p>
+        )}
         <div style={{ backgroundColor: '#f0fdf4', borderRadius: '12px', padding: '16px', marginBottom: '24px', textAlign: 'left' }}>
           <p style={{ fontSize: '13px', color: '#166534', margin: '0 0 4px', fontWeight: 600 }}>📍 Au Vieux Moulin</p>
           <p style={{ fontSize: '13px', color: '#6b7280', margin: 0 }}>Rue de la Tour Carrée 338, 5300 Vezin</p>
@@ -410,10 +420,27 @@ export default function CommandePage() {
                 </div>
               </div>
 
+              {/* Toggle récurrence */}
+              <div
+                onClick={() => setRecurrente(!recurrente)}
+                style={{ marginBottom: '16px', padding: '14px 16px', background: recurrente ? '#f0fdf4' : '#f9fafb', borderRadius: '12px', border: `2px solid ${recurrente ? '#7CBF3A' : '#e5e7eb'}`, cursor: 'pointer', display: 'flex', alignItems: 'flex-start', gap: '12px', transition: 'all 0.15s' }}>
+                <div style={{ width: '22px', height: '22px', borderRadius: '4px', border: `2px solid ${recurrente ? '#7CBF3A' : '#d1d5db'}`, background: recurrente ? '#7CBF3A' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: '1px' }}>
+                  {recurrente && <span style={{ color: '#1C2B1A', fontWeight: 900, fontSize: '14px', lineHeight: 1 }}>✓</span>}
+                </div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '14px', color: recurrente ? '#166534' : '#374151' }}>
+                    🔄 Commande récurrente (chaque semaine)
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '3px' }}>
+                    Votre commande sera préparée toutes les semaines. Vous pourrez la suspendre depuis votre espace client. <strong style={{ color: '#3B6D11' }}>Activation sous 24h par la boulangerie.</strong>
+                  </div>
+                </div>
+              </div>
+
               {/* Calendrier retrait */}
               <div style={{ marginBottom: '16px' }}>
                 <div style={{ fontSize: '14px', fontWeight: 700, color: '#1C2B1A', marginBottom: '10px' }}>
-                  📅 Choisissez votre date de retrait
+                  📅 {recurrente ? 'Date de début souhaitée (optionnel)' : 'Choisissez votre date de retrait'}
                 </div>
 
                 {fermetures.length === 0 && !dateMinStr ? (
@@ -429,15 +456,21 @@ export default function CommandePage() {
 
                 {dateRetrait && (
                   <div style={{ marginTop: '10px', padding: '10px 14px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #bbf7d0', fontSize: '13px', color: '#166534', fontWeight: 600 }}>
-                    ✓ Retrait le {labelDateRetrait}
+                    ✓ {recurrente ? 'Début le' : 'Retrait le'} {labelDateRetrait}
+                  </div>
+                )}
+
+                {recurrente && !dateRetrait && (
+                  <div style={{ marginTop: '10px', padding: '10px 14px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #bbf7d0', fontSize: '13px', color: '#166534' }}>
+                    💡 Sans date de début, la boulangerie vous contactera pour définir le premier retrait.
                   </div>
                 )}
               </div>
 
               <button
                 onClick={() => setEtape('infos')}
-                disabled={!dateRetrait}
-                style={{ width: '100%', backgroundColor: dateRetrait ? '#1C2B1A' : '#9ca3af', color: '#7CBF3A', border: 'none', borderRadius: '12px', padding: '16px', fontSize: '15px', fontWeight: 'bold', cursor: dateRetrait ? 'pointer' : 'not-allowed' }}>
+                disabled={!recurrente && !dateRetrait}
+                style={{ width: '100%', backgroundColor: (recurrente || dateRetrait) ? '#1C2B1A' : '#9ca3af', color: '#7CBF3A', border: 'none', borderRadius: '12px', padding: '16px', fontSize: '15px', fontWeight: 'bold', cursor: (recurrente || dateRetrait) ? 'pointer' : 'not-allowed' }}>
                 Continuer → Mes informations
               </button>
             </>
@@ -450,7 +483,10 @@ export default function CommandePage() {
         <div>
           <div style={{ backgroundColor: '#f0fdf4', borderRadius: '10px', border: '1px solid #86efac', padding: '12px 16px', marginBottom: '20px', fontSize: '13px', color: '#166534' }}>
             <strong>{nbArticles} article{nbArticles > 1 ? 's' : ''}</strong> — Total : <strong>{total.toFixed(2)} €</strong>
-            <br />Retrait le <strong>{labelDateRetrait}</strong>
+            {recurrente
+              ? <><br />🔄 <strong>Commande récurrente</strong>{dateRetrait ? ` — début le ${labelDateRetrait}` : ' — date à définir'}</>
+              : <><br />Retrait le <strong>{labelDateRetrait}</strong></>
+            }
           </div>
 
           <div style={{ backgroundColor: 'white', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '20px', marginBottom: '16px' }}>
@@ -487,7 +523,7 @@ export default function CommandePage() {
             onClick={passerCommande}
             disabled={loading || !nom || !prenom || !email || !telephone}
             style={{ width: '100%', backgroundColor: (!nom || !prenom || !email || !telephone) ? '#9ca3af' : '#1C2B1A', color: '#7CBF3A', border: 'none', borderRadius: '12px', padding: '16px', fontSize: '15px', fontWeight: 'bold', cursor: (!nom || !prenom || !email || !telephone) ? 'not-allowed' : 'pointer' }}>
-            {loading ? 'Envoi en cours...' : `✓ Confirmer ma commande — ${total.toFixed(2)} €`}
+            {loading ? 'Envoi en cours...' : recurrente ? `🔄 Activer ma commande récurrente — ${total.toFixed(2)} € / sem.` : `✓ Confirmer ma commande — ${total.toFixed(2)} €`}
           </button>
 
           <p style={{ textAlign: 'center', fontSize: '12px', color: '#9ca3af', marginTop: '12px' }}>

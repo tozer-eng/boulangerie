@@ -1,21 +1,60 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
-const STATUTS = ['en_attente', 'confirmee', 'preparee', 'recuperee', 'annulee']
-const STATUT_COULEURS: Record<string, { bg: string; color: string }> = {
-  en_attente: { bg: '#fef9c3', color: '#854d0e' },
-  confirmee: { bg: '#dbeafe', color: '#1e40af' },
-  preparee: { bg: '#f0fdf4', color: '#166534' },
-  recuperee: { bg: '#dcfce7', color: '#166534' },
-  annulee: { bg: '#fee2e2', color: '#991b1b' },
+// ─── Types & constantes ───────────────────────────────────────────────────────
+
+const STATUTS_PROGRESSION = ['en_attente', 'confirmee', 'preparee', 'recuperee'] as const
+const STATUT_META: Record<string, { bg: string; color: string; border: string; label: string; emoji: string }> = {
+  en_attente: { bg: '#fef9c3', color: '#854d0e', border: '#fde68a', label: 'En attente',   emoji: '⏳' },
+  confirmee:  { bg: '#dbeafe', color: '#1e40af', border: '#bfdbfe', label: 'Confirmée',     emoji: '✅' },
+  preparee:   { bg: '#fef3c7', color: '#92400e', border: '#fcd34d', label: 'Prête',          emoji: '📦' },
+  recuperee:  { bg: '#dcfce7', color: '#166534', border: '#86efac', label: 'Récupérée',     emoji: '✓' },
+  annulee:    { bg: '#fee2e2', color: '#991b1b', border: '#fca5a5', label: 'Annulée',        emoji: '✕' },
 }
 
+function formatDateFr(str: string) {
+  const d = new Date(str)
+  return d.toLocaleDateString('fr-BE', { weekday: 'short', day: 'numeric', month: 'short' })
+}
+function estAujourdHui(str: string) {
+  return new Date(str).toISOString().split('T')[0] === new Date().toISOString().split('T')[0]
+}
+function estPasse(str: string) {
+  return new Date(str).toISOString().split('T')[0] < new Date().toISOString().split('T')[0]
+}
+
+// ─── Modal de confirmation ────────────────────────────────────────────────────
+
+function ModalConfirm({ texte, onOui, onNon }: { texte: string; onOui: () => void; onNon: () => void }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+      <div style={{ background: 'white', borderRadius: '16px', padding: '28px 24px', maxWidth: '340px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ fontSize: '36px', textAlign: 'center', marginBottom: '12px' }}>⚠️</div>
+        <p style={{ textAlign: 'center', fontSize: '14px', color: '#374151', lineHeight: 1.5, marginBottom: '20px' }}>{texte}</p>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={onNon} style={{ flex: 1, padding: '10px', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: '#374151' }}>
+            Annuler
+          </button>
+          <button onClick={onOui} style={{ flex: 1, padding: '10px', background: '#dc2626', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: '700', color: 'white' }}>
+            Confirmer
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Page principale ──────────────────────────────────────────────────────────
+
 export default function CommandesPage() {
-  const [commandes, setCommandes] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [filtre, setFiltre] = useState('tous')
-  const [commandeOuverte, setCommandeOuverte] = useState<any>(null)
+  const [commandes, setCommandes]               = useState<any[]>([])
+  const [loading, setLoading]                   = useState(true)
+  const [filtre, setFiltre]                     = useState<string>('actif')
+  const [recherche, setRecherche]               = useState('')
+  const [confirming, setConfirming]             = useState<{ id: string; action: 'recuperee' | 'annulee' } | null>(null)
+  const [detailOuvert, setDetailOuvert]         = useState<string | null>(null)
+  const [changementStatut, setChangementStatut] = useState<string | null>(null) // id en cours d'update
   const supabase = createClient()
 
   useEffect(() => { chargerCommandes() }, [])
@@ -23,182 +62,329 @@ export default function CommandesPage() {
   async function chargerCommandes() {
     const { data } = await supabase
       .from('commandes')
-      .select('*, client:clients(nom, prenom, telephone, email), lignes:lignes_commande(*, produit:produits(nom, prix))')
+      .select('*, client:clients(id, nom, prenom, telephone, email, statut), lignes:lignes_commande(*, produit:produits(nom, prix))')
       .order('date_retrait', { ascending: true })
     setCommandes(data ?? [])
     setLoading(false)
   }
 
-  async function changerStatut(id: string, statut: string) {
-    await supabase.from('commandes').update({ statut }).eq('id', id)
-    chargerCommandes()
-    if (commandeOuverte?.id === id) setCommandeOuverte({ ...commandeOuverte, statut })
+  // ── Changer statut avec logique métier ───────────────────────────────────────
+  async function changerStatut(commandeId: string, nouveauStatut: string) {
+    const commande = commandes.find(c => c.id === commandeId)
+    if (!commande) return
+
+    // 🔒 Protection : récupérée est irréversible (sauf vers annulée avec confirmation)
+    if (commande.statut === 'recuperee' && nouveauStatut !== 'annulee') return
+    if (commande.statut === 'recuperee' && nouveauStatut === 'annulee') {
+      setConfirming({ id: commandeId, action: 'annulee' })
+      return
+    }
+
+    // Demander confirmation pour "récupérée"
+    if (nouveauStatut === 'recuperee') {
+      setConfirming({ id: commandeId, action: 'recuperee' })
+      return
+    }
+    // Demander confirmation pour "annulée"
+    if (nouveauStatut === 'annulee') {
+      setConfirming({ id: commandeId, action: 'annulee' })
+      return
+    }
+
+    await effectuerChangement(commandeId, nouveauStatut)
   }
 
-  const commandesFiltrees = filtre === 'tous'
-    ? commandes
-    : commandes.filter(c => c.statut === filtre)
+  async function effectuerChangement(commandeId: string, nouveauStatut: string) {
+    const commande = commandes.find(c => c.id === commandeId)
+    setChangementStatut(commandeId)
 
+    await supabase.from('commandes').update({ statut: nouveauStatut }).eq('id', commandeId)
+
+    // 🌟 Si récupérée → passer le client en "vérifié"
+    if (nouveauStatut === 'recuperee' && commande?.client?.id) {
+      const statutActuel = commande.client.statut
+      if (statutActuel !== 'vip') {
+        await supabase.from('clients').update({ statut: 'verifie' }).eq('id', commande.client.id)
+      }
+    }
+
+    await chargerCommandes()
+    setChangementStatut(null)
+    setConfirming(null)
+  }
+
+  // ── Filtres ──────────────────────────────────────────────────────────────────
   const aujourd_hui = new Date().toISOString().split('T')[0]
-  const commandesAujourdhui = commandes.filter(c => c.date_retrait === aujourd_hui)
 
-  if (loading) return <p style={{ color: '#6b7280' }}>Chargement...</p>
+  const commandesFiltrees = commandes.filter(c => {
+    // Filtres statut/période
+    if (filtre === 'actif') {
+      if (c.statut === 'annulee' || c.statut === 'recuperee') return false
+    } else if (filtre === 'aujourd_hui') {
+      if (c.date_retrait !== aujourd_hui) return false
+      if (c.statut === 'annulee') return false
+    } else if (filtre === 'recuperee') {
+      if (c.statut !== 'recuperee') return false
+    } else if (filtre === 'annulee') {
+      if (c.statut !== 'annulee') return false
+    }
+    // Recherche texte
+    if (recherche) {
+      const q = recherche.toLowerCase()
+      return (
+        c.client?.nom?.toLowerCase().includes(q) ||
+        c.client?.prenom?.toLowerCase().includes(q) ||
+        c.client?.telephone?.includes(q)
+      )
+    }
+    return true
+  })
+
+  const nb = {
+    actif:        commandes.filter(c => c.statut !== 'annulee' && c.statut !== 'recuperee').length,
+    aujourd_hui:  commandes.filter(c => c.date_retrait === aujourd_hui && c.statut !== 'annulee').length,
+    recuperee:    commandes.filter(c => c.statut === 'recuperee').length,
+    annulee:      commandes.filter(c => c.statut === 'annulee').length,
+  }
+
+  if (loading) return <div style={{ color: '#6b7280', padding: '40px' }}>Chargement…</div>
 
   return (
-    <div style={{ display: 'flex', gap: '24px', height: 'calc(100vh - 96px)' }}>
+    <div style={{ maxWidth: '960px' }}>
 
-      {/* Liste */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-          <h1 style={{ fontSize: '24px', fontWeight: 'bold', margin: 0 }}>
-            Commandes <span style={{ fontSize: '14px', color: '#6b7280', fontWeight: 'normal' }}>({commandes.length})</span>
-          </h1>
-          <div style={{ backgroundColor: '#fef9c3', border: '1px solid #fbbf24', borderRadius: '8px', padding: '6px 12px', fontSize: '13px', color: '#854d0e' }}>
-            📅 Aujourd'hui : {commandesAujourdhui.length} commande{commandesAujourdhui.length > 1 ? 's' : ''}
-          </div>
-        </div>
+      {/* Modal confirmation */}
+      {confirming && (
+        <ModalConfirm
+          texte={
+            confirming.action === 'recuperee'
+              ? 'Confirmer la récupération de cette commande ?\nCette action est définitive et passera le client en "vérifié".'
+              : 'Confirmer l\'annulation de cette commande ? Cette action ne peut pas être défaite.'
+          }
+          onNon={() => setConfirming(null)}
+          onOui={() => effectuerChangement(confirming.id, confirming.action)}
+        />
+      )}
 
-        {/* Filtres statut */}
-        <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
-          <button
-            onClick={() => setFiltre('tous')}
-            style={{ padding: '4px 12px', borderRadius: '999px', fontSize: '12px', border: '1px solid', cursor: 'pointer', backgroundColor: filtre === 'tous' ? '#1C2B1A' : 'white', color: filtre === 'tous' ? '#7CBF3A' : '#6b7280', borderColor: filtre === 'tous' ? '#1C2B1A' : '#d1d5db' }}
-          >
-            Toutes ({commandes.length})
-          </button>
-          {STATUTS.map(s => {
-            const nb = commandes.filter(c => c.statut === s).length
-            const col = STATUT_COULEURS[s]
-            return (
-              <button key={s} onClick={() => setFiltre(s)}
-                style={{ padding: '4px 12px', borderRadius: '999px', fontSize: '12px', border: '1px solid', cursor: 'pointer', backgroundColor: filtre === s ? col.bg : 'white', color: filtre === s ? col.color : '#6b7280', borderColor: filtre === s ? col.color : '#d1d5db' }}
-              >
-                {s.replace('_', ' ')} ({nb})
-              </button>
-            )
-          })}
-        </div>
-
-        {/* Tableau */}
-        <div style={{ backgroundColor: 'white', borderRadius: '12px', border: '1px solid #e5e7eb', overflow: 'auto', flex: 1 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid #e5e7eb', backgroundColor: '#f9fafb' }}>
-                <th style={{ padding: '10px 16px', textAlign: 'left', fontSize: '12px', color: '#6b7280', fontWeight: '500' }}>Client</th>
-                <th style={{ padding: '10px 16px', textAlign: 'left', fontSize: '12px', color: '#6b7280', fontWeight: '500' }}>Date retrait</th>
-                <th style={{ padding: '10px 16px', textAlign: 'left', fontSize: '12px', color: '#6b7280', fontWeight: '500' }}>Type</th>
-                <th style={{ padding: '10px 16px', textAlign: 'left', fontSize: '12px', color: '#6b7280', fontWeight: '500' }}>Montant</th>
-                <th style={{ padding: '10px 16px', textAlign: 'left', fontSize: '12px', color: '#6b7280', fontWeight: '500' }}>Statut</th>
-              </tr>
-            </thead>
-            <tbody>
-              {commandesFiltrees.length === 0 && (
-                <tr>
-                  <td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: '#9ca3af' }}>
-                    Aucune commande
-                  </td>
-                </tr>
-              )}
-              {commandesFiltrees.map(c => {
-                const col = STATUT_COULEURS[c.statut]
-                return (
-                  <tr key={c.id}
-                    onClick={() => setCommandeOuverte(c)}
-                    style={{ borderBottom: '1px solid #f3f4f6', cursor: 'pointer', backgroundColor: commandeOuverte?.id === c.id ? '#f0fdf4' : 'white' }}
-                  >
-                    <td style={{ padding: '12px 16px' }}>
-                      <div style={{ fontWeight: '500' }}>{c.client?.prenom} {c.client?.nom}</div>
-                      <div style={{ fontSize: '12px', color: '#6b7280' }}>{c.client?.telephone}</div>
-                    </td>
-                    <td style={{ padding: '12px 16px', color: '#374151' }}>
-                      {new Date(c.date_retrait).toLocaleDateString('fr-BE')}
-                    </td>
-                    <td style={{ padding: '12px 16px' }}>
-                      <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '999px', backgroundColor: c.type === 'recurrente' ? '#e0f2fe' : '#f3f4f6', color: c.type === 'recurrente' ? '#0369a1' : '#6b7280' }}>
-                        {c.type === 'recurrente' ? '🔄 Récurrente' : '📋 Ponctuelle'}
-                      </span>
-                    </td>
-                    <td style={{ padding: '12px 16px', fontWeight: '500' }}>
-                      {Number(c.montant_total).toFixed(2)} €
-                    </td>
-                    <td style={{ padding: '12px 16px' }}>
-                      <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '999px', backgroundColor: col.bg, color: col.color, fontWeight: '500' }}>
-                        {c.statut.replace('_', ' ')}
-                      </span>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+      {/* En-tête */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
+        <h1 style={{ fontSize: '22px', fontWeight: 'bold', margin: 0, color: '#1C2B1A' }}>
+          Commandes
+        </h1>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {nb.aujourd_hui > 0 && (
+            <div style={{ backgroundColor: '#fef9c3', border: '1px solid #fbbf24', borderRadius: '8px', padding: '6px 12px', fontSize: '13px', color: '#854d0e', fontWeight: 600 }}>
+              📅 {nb.aujourd_hui} retrait{nb.aujourd_hui > 1 ? 's' : ''} aujourd'hui
+            </div>
+          )}
+          <input
+            type="text" placeholder="🔍 Rechercher…" value={recherche} onChange={e => setRecherche(e.target.value)}
+            style={{ border: '1px solid #d1d5db', borderRadius: '8px', padding: '7px 12px', fontSize: '13px', width: '180px' }}
+          />
         </div>
       </div>
 
-      {/* Détail commande */}
-      {commandeOuverte && (
-        <div style={{ width: '320px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {/* Onglets filtres */}
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '16px', background: '#f3f4f6', borderRadius: '10px', padding: '4px' }}>
+        {([
+          { id: 'actif', label: 'En cours', nb: nb.actif },
+          { id: 'aujourd_hui', label: "Aujourd'hui", nb: nb.aujourd_hui },
+          { id: 'recuperee', label: 'Récupérées', nb: nb.recuperee },
+          { id: 'annulee', label: 'Annulées', nb: nb.annulee },
+        ] as const).map(tab => (
+          <button key={tab.id} onClick={() => setFiltre(tab.id)}
+            style={{ flex: 1, padding: '7px 10px', borderRadius: '7px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: filtre === tab.id ? 700 : 400, background: filtre === tab.id ? 'white' : 'transparent', color: filtre === tab.id ? '#1C2B1A' : '#6b7280', boxShadow: filtre === tab.id ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}>
+            {tab.label} {tab.nb > 0 && <span style={{ background: filtre === tab.id ? '#1C2B1A' : '#d1d5db', color: filtre === tab.id ? '#7CBF3A' : '#6b7280', borderRadius: '999px', padding: '1px 6px', fontSize: '11px', marginLeft: '4px' }}>{tab.nb}</span>}
+          </button>
+        ))}
+      </div>
 
-          {/* Infos commande */}
-          <div style={{ backgroundColor: 'white', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
-              <div>
-                <h2 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 2px' }}>
-                  {commandeOuverte.client?.prenom} {commandeOuverte.client?.nom}
-                </h2>
-                <p style={{ fontSize: '12px', color: '#6b7280', margin: 0 }}>
-                  Retrait le {new Date(commandeOuverte.date_retrait).toLocaleDateString('fr-BE')}
-                </p>
-              </div>
-              <button onClick={() => setCommandeOuverte(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '18px' }}>×</button>
-            </div>
+      {/* Liste cartes */}
+      {commandesFiltrees.length === 0 ? (
+        <div style={{ background: 'white', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '48px', textAlign: 'center', color: '#9ca3af' }}>
+          <div style={{ fontSize: '36px', marginBottom: '8px' }}>📭</div>
+          <p style={{ margin: 0 }}>Aucune commande dans cette catégorie</p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {commandesFiltrees.map(c => {
+            const meta       = STATUT_META[c.statut] ?? STATUT_META['en_attente']
+            const ouvert     = detailOuvert === c.id
+            const verrouillee = c.statut === 'recuperee' || c.statut === 'annulee'
+            const enCours    = changementStatut === c.id
+            const auj        = estAujourdHui(c.date_retrait)
+            const passe      = estPasse(c.date_retrait) && c.statut !== 'recuperee'
 
-            {/* Contact */}
-            <a href={`tel:${commandeOuverte.client?.telephone}`}
-              style={{ display: 'block', padding: '8px 12px', backgroundColor: '#f0fdf4', borderRadius: '8px', textDecoration: 'none', color: '#166534', fontSize: '13px', marginBottom: '12px' }}>
-              📞 {commandeOuverte.client?.telephone}
-            </a>
+            return (
+              <div key={c.id} style={{
+                background: 'white', borderRadius: '12px',
+                border: `1px solid ${auj ? '#fde68a' : '#e5e7eb'}`,
+                overflow: 'hidden',
+                opacity: enCours ? 0.7 : 1,
+                transition: 'opacity 0.2s',
+                boxShadow: auj ? '0 0 0 2px #fde68a' : 'none',
+              }}>
 
-            {/* Produits commandés */}
-            <div style={{ marginBottom: '16px' }}>
-              <p style={{ fontSize: '12px', color: '#6b7280', marginBottom: '8px', fontWeight: '500' }}>Produits commandés</p>
-              {commandeOuverte.lignes?.map((l: any) => (
-                <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '4px 0', borderBottom: '1px solid #f3f4f6' }}>
-                  <span>{l.produit?.nom} <span style={{ color: '#6b7280' }}>×{l.quantite}</span></span>
-                  <span style={{ fontWeight: '500' }}>{(l.quantite * l.prix_unitaire).toFixed(2)} €</span>
-                </div>
-              ))}
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', fontWeight: 'bold', marginTop: '8px', paddingTop: '8px', borderTop: '2px solid #e5e7eb' }}>
-                <span>Total</span>
-                <span>{Number(commandeOuverte.montant_total).toFixed(2)} €</span>
-              </div>
-            </div>
+                {/* Ligne principale */}
+                <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
 
-            {/* Changer statut */}
-            <div>
-              <p style={{ fontSize: '12px', color: '#6b7280', marginBottom: '8px', fontWeight: '500' }}>Changer le statut</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {STATUTS.map(s => {
-                  const col = STATUT_COULEURS[s]
-                  const actif = commandeOuverte.statut === s
-                  return (
-                    <button key={s} onClick={() => changerStatut(commandeOuverte.id, s)}
-                      style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid', cursor: 'pointer', fontSize: '13px', textAlign: 'left', backgroundColor: actif ? col.bg : 'white', color: actif ? col.color : '#6b7280', borderColor: actif ? col.color : '#e5e7eb', fontWeight: actif ? '600' : 'normal' }}
-                    >
-                      {actif ? '● ' : '○ '}{s.replace('_', ' ')}
+                  {/* Badge statut */}
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: meta.color, flexShrink: 0 }} />
+
+                  {/* Client */}
+                  <div style={{ flex: 1, minWidth: '120px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 700, fontSize: '14px', color: '#1C2B1A' }}>
+                        {c.client?.prenom} {c.client?.nom}
+                      </span>
+                      {c.type === 'recurrente' && (
+                        <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '999px', background: '#e0f2fe', color: '#0369a1', fontWeight: 600 }}>🔄 Réc.</span>
+                      )}
+                      {c.client?.statut === 'vip' && (
+                        <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '999px', background: '#fef9c3', color: '#854d0e', fontWeight: 600 }}>⭐ VIP</span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '1px' }}>
+                      {c.client?.telephone && (
+                        <a href={`tel:${c.client.telephone}`} style={{ color: '#6b7280', textDecoration: 'none' }}>
+                          📞 {c.client.telephone}
+                        </a>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Date */}
+                  <div style={{ textAlign: 'center', minWidth: '80px' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: auj ? '#854d0e' : passe ? '#dc2626' : '#374151', background: auj ? '#fef9c3' : passe ? '#fee2e2' : '#f3f4f6', borderRadius: '6px', padding: '3px 8px', display: 'inline-block' }}>
+                      {auj ? '📅 Aujourd\'hui' : passe ? '⚠ ' + formatDateFr(c.date_retrait) : formatDateFr(c.date_retrait)}
+                    </div>
+                  </div>
+
+                  {/* Montant */}
+                  <div style={{ fontWeight: 700, fontSize: '15px', color: '#1C2B1A', minWidth: '70px', textAlign: 'right' }}>
+                    {Number(c.montant_total).toFixed(2)} €
+                  </div>
+
+                  {/* Statut badge */}
+                  <div style={{ padding: '3px 10px', borderRadius: '999px', background: meta.bg, color: meta.color, fontSize: '12px', fontWeight: 600, border: `1px solid ${meta.border}`, whiteSpace: 'nowrap' }}>
+                    {meta.emoji} {meta.label}
+                  </div>
+
+                  {/* Actions */}
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
+                    {/* Bouton récupérée (raccourci direct) */}
+                    {c.statut !== 'recuperee' && c.statut !== 'annulee' && (
+                      <button
+                        onClick={e => { e.stopPropagation(); changerStatut(c.id, 'recuperee') }}
+                        style={{ background: '#1C2B1A', color: '#7CBF3A', border: 'none', borderRadius: '8px', padding: '7px 12px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        ✓ Récupérée
+                      </button>
+                    )}
+                    {/* Détail toggle */}
+                    <button
+                      onClick={() => setDetailOuvert(ouvert ? null : c.id)}
+                      style={{ background: '#f3f4f6', color: '#6b7280', border: 'none', borderRadius: '8px', padding: '7px 10px', fontSize: '12px', cursor: 'pointer' }}>
+                      {ouvert ? '▲' : '▼'}
                     </button>
-                  )
-                })}
-              </div>
-            </div>
-          </div>
+                  </div>
+                </div>
 
-          {/* Notes */}
-          {commandeOuverte.notes && (
-            <div style={{ backgroundColor: '#fef9c3', borderRadius: '12px', border: '1px solid #fbbf24', padding: '16px' }}>
-              <p style={{ fontSize: '12px', fontWeight: '600', color: '#854d0e', margin: '0 0 6px' }}>📝 Notes</p>
-              <p style={{ fontSize: '13px', color: '#78350f', margin: 0 }}>{commandeOuverte.notes}</p>
-            </div>
-          )}
+                {/* Détail produits (toujours visible en résumé) */}
+                <div style={{ borderTop: '1px solid #f3f4f6', padding: '10px 16px', background: '#fafafa', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  {c.lignes?.map((l: any) => (
+                    <span key={l.id} style={{ fontSize: '12px', padding: '3px 9px', borderRadius: '999px', background: 'white', border: '1px solid #e5e7eb', color: '#374151' }}>
+                      {l.produit?.nom} <strong>×{l.quantite}</strong>
+                    </span>
+                  ))}
+                  {c.notes && (
+                    <span style={{ fontSize: '11px', color: '#854d0e', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: '999px', padding: '3px 9px' }}>
+                      📝 {c.notes}
+                    </span>
+                  )}
+                </div>
+
+                {/* Panneau détail étendu */}
+                {ouvert && (
+                  <div style={{ borderTop: '1px solid #e5e7eb', padding: '16px', background: 'white' }}>
+                    <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+
+                      {/* Détail produits + total */}
+                      <div style={{ flex: 1, minWidth: '200px' }}>
+                        <p style={{ fontSize: '12px', fontWeight: 700, color: '#6b7280', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Détail commande</p>
+                        {c.lignes?.map((l: any) => (
+                          <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '5px 0', borderBottom: '1px solid #f3f4f6' }}>
+                            <span style={{ color: '#374151' }}>{l.produit?.nom} <span style={{ color: '#9ca3af' }}>×{l.quantite}</span></span>
+                            <span style={{ fontWeight: 600 }}>{(l.quantite * Number(l.prix_unitaire)).toFixed(2)} €</span>
+                          </div>
+                        ))}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', fontWeight: 700, marginTop: '8px', paddingTop: '8px', borderTop: '2px solid #e5e7eb' }}>
+                          <span>Total</span>
+                          <span>{Number(c.montant_total).toFixed(2)} €</span>
+                        </div>
+                      </div>
+
+                      {/* Progression statut */}
+                      {!verrouillee && (
+                        <div style={{ minWidth: '200px' }}>
+                          <p style={{ fontSize: '12px', fontWeight: 700, color: '#6b7280', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Avancement</p>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            {STATUTS_PROGRESSION.map((s) => {
+                              const sm        = STATUT_META[s]
+                              const courant   = c.statut === s
+                              const passe     = STATUTS_PROGRESSION.indexOf(s) < STATUTS_PROGRESSION.indexOf(c.statut as any)
+                              const estBloq   = s === 'recuperee' // toujours via bouton direct
+                              return (
+                                <button key={s}
+                                  onClick={() => !courant && !passe && !estBloq && changerStatut(c.id, s)}
+                                  style={{
+                                    display: 'flex', alignItems: 'center', gap: '8px',
+                                    padding: '7px 10px', borderRadius: '8px', border: `1px solid ${courant ? sm.border : '#e5e7eb'}`,
+                                    background: courant ? sm.bg : passe ? '#f9fafb' : 'white',
+                                    color: courant ? sm.color : passe ? '#9ca3af' : '#374151',
+                                    fontSize: '12px', fontWeight: courant ? 700 : 400,
+                                    cursor: courant || passe || estBloq ? 'default' : 'pointer',
+                                    textAlign: 'left',
+                                  }}>
+                                  <span style={{ fontSize: '14px' }}>{passe ? '✓' : courant ? sm.emoji : '○'}</span>
+                                  {sm.label}
+                                  {estBloq && !courant && <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#9ca3af' }}>via bouton ↑</span>}
+                                </button>
+                              )
+                            })}
+                            {/* Annuler toujours disponible */}
+                            <button
+                              onClick={() => changerStatut(c.id, 'annulee')}
+                              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px', borderRadius: '8px', border: '1px solid #fca5a5', background: '#fff', color: '#dc2626', fontSize: '12px', cursor: 'pointer', marginTop: '4px' }}>
+                              <span>✕</span> Annuler la commande
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Commande récupérée — verrouillée */}
+                      {c.statut === 'recuperee' && (
+                        <div style={{ minWidth: '200px', background: '#f0fdf4', borderRadius: '10px', padding: '14px', border: '1px solid #86efac' }}>
+                          <p style={{ fontSize: '13px', fontWeight: 700, color: '#166534', margin: '0 0 6px' }}>🔒 Commande récupérée</p>
+                          <p style={{ fontSize: '12px', color: '#4ade80', margin: '0 0 10px' }}>Cette commande est finalisée. Le statut est verrouillé.</p>
+                          <button onClick={() => changerStatut(c.id, 'annulee')}
+                            style={{ width: '100%', padding: '7px', background: 'white', border: '1px solid #fca5a5', borderRadius: '7px', color: '#dc2626', fontSize: '12px', cursor: 'pointer' }}>
+                            ✕ Annuler quand même
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Commande annulée */}
+                      {c.statut === 'annulee' && (
+                        <div style={{ minWidth: '200px', background: '#fef2f2', borderRadius: '10px', padding: '14px', border: '1px solid #fca5a5' }}>
+                          <p style={{ fontSize: '13px', fontWeight: 700, color: '#991b1b', margin: '0 0 6px' }}>🔒 Commande annulée</p>
+                          <p style={{ fontSize: '12px', color: '#f87171', margin: 0 }}>Cette commande a été annulée et ne peut plus être modifiée.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
