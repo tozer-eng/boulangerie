@@ -217,10 +217,15 @@ export default function CommandePage() {
   const [email, setEmail]                 = useState('')
   const [telephone, setTelephone]         = useState('')
   const [notes, setNotes]                 = useState('')
-  const [recurrente, setRecurrente]       = useState(false)
-  const [clientVerifie, setClientVerifie] = useState(false)  // true si statut vérifié ou vip
-  const [loading, setLoading]             = useState(false)
-  const [etape, setEtape]                 = useState<'panier' | 'infos' | 'confirmation'>('panier')
+  const [recurrente, setRecurrente]         = useState(false)
+  const [clientVerifie, setClientVerifie]   = useState(false)
+  const [clientConnecte, setClientConnecte] = useState(false)
+  const [creerCompte, setCreerCompte]       = useState(false)
+  const [mdpCompte, setMdpCompte]           = useState('')
+  const [mdpConfirm, setMdpConfirm]         = useState('')
+  const [erreurCompte, setErreurCompte]     = useState('')
+  const [loading, setLoading]               = useState(false)
+  const [etape, setEtape]                   = useState<'panier' | 'infos' | 'confirmation'>('panier')
   const supabase = createClient()
   const router   = useRouter()
 
@@ -249,13 +254,19 @@ export default function CommandePage() {
 
       // Vérifier si le client connecté est vérifié ou vip
       if (authData.user) {
+        setClientConnecte(true)
         const { data: clientData } = await supabase
           .from('clients')
-          .select('statut')
+          .select('statut, prenom, nom, telephone, email')
           .eq('user_id', authData.user.id)
           .single()
-        if (clientData && (clientData.statut === 'verifie' || clientData.statut === 'vip')) {
-          setClientVerifie(true)
+        if (clientData) {
+          if (clientData.statut === 'verifie' || clientData.statut === 'vip') setClientVerifie(true)
+          // Préremplir les champs si connecté
+          if (clientData.prenom) setPrenom(clientData.prenom)
+          if (clientData.nom) setNom(clientData.nom)
+          if (clientData.telephone) setTelephone(clientData.telephone)
+          if (clientData.email) setEmail(clientData.email)
         }
       }
     })
@@ -284,7 +295,23 @@ export default function CommandePage() {
   async function passerCommande() {
     if (!nom || !prenom || !email || !telephone) return
     if (!recurrente && !dateRetrait) return
+    if (creerCompte && (mdpCompte.length < 8 || mdpCompte !== mdpConfirm)) return
     setLoading(true)
+    setErreurCompte('')
+
+    // Créer le compte auth si demandé
+    if (creerCompte && !clientConnecte) {
+      const { error: authError } = await supabase.auth.signUp({
+        email,
+        password: mdpCompte,
+        options: { data: { prenom, nom, telephone } },
+      })
+      if (authError) {
+        setErreurCompte(authError.message.includes('already') ? 'Un compte existe déjà avec cet email.' : authError.message)
+        setLoading(false)
+        return
+      }
+    }
 
     let clientId: string
     const { data: clientExistant } = await supabase
@@ -352,6 +379,12 @@ export default function CommandePage() {
           <p style={{ fontSize: '13px', color: '#6b7280', margin: 0 }}>Rue de la Tour Carrée 338, 5300 Vezin</p>
           <p style={{ fontSize: '13px', color: '#6b7280', margin: 0 }}>081/30.25.76</p>
         </div>
+        {creerCompte && (
+          <div style={{ background: '#eff6ff', border: '1px solid #93c5fd', borderRadius: '10px', padding: '12px 16px', marginBottom: '20px', fontSize: '13px', color: '#1d4ed8', textAlign: 'left' }}>
+            <strong>📧 Vérifiez votre email !</strong><br />
+            Un lien de confirmation a été envoyé à <strong>{email}</strong> pour activer votre compte.
+          </div>
+        )}
         <button onClick={() => router.push('/client/catalogue')}
           style={{ backgroundColor: '#1C2B1A', color: '#7CBF3A', border: 'none', borderRadius: '10px', padding: '12px 24px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>
           Retour au catalogue
@@ -509,7 +542,8 @@ export default function CommandePage() {
       {/* ── Étape 2 : Informations client ── */}
       {etape === 'infos' && (
         <div>
-          <div style={{ backgroundColor: '#f0fdf4', borderRadius: '10px', border: '1px solid #86efac', padding: '12px 16px', marginBottom: '20px', fontSize: '13px', color: '#166534' }}>
+          {/* Résumé commande */}
+          <div style={{ backgroundColor: '#f0fdf4', borderRadius: '10px', border: '1px solid #86efac', padding: '12px 16px', marginBottom: '16px', fontSize: '13px', color: '#166534' }}>
             <strong>{nbArticles} article{nbArticles > 1 ? 's' : ''}</strong> — Total : <strong>{total.toFixed(2)} €</strong>
             {recurrente
               ? <><br />🔄 <strong>Commande récurrente</strong>{dateRetrait ? ` — début le ${labelDateRetrait}` : ' — date à définir'}</>
@@ -517,41 +551,105 @@ export default function CommandePage() {
             }
           </div>
 
-          <div style={{ backgroundColor: 'white', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '20px', marginBottom: '16px' }}>
+          {/* Si connecté : info */}
+          {clientConnecte && (
+            <div style={{ background: '#eff6ff', border: '1px solid #93c5fd', borderRadius: '10px', padding: '10px 14px', marginBottom: '14px', fontSize: '13px', color: '#1d4ed8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>👤 Connecté — vos informations sont préremplies</span>
+              <a href="/client/compte" style={{ color: '#1d4ed8', fontSize: '12px', fontWeight: 600 }}>Mon compte →</a>
+            </div>
+          )}
+
+          {/* Infos coordonnées */}
+          <div style={{ backgroundColor: 'white', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '20px', marginBottom: '12px' }}>
+            <p style={{ fontSize: '13px', fontWeight: 700, color: '#374151', margin: '0 0 14px' }}>Vos coordonnées</p>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>Prénom *</label>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#6b7280', marginBottom: '4px' }}>Prénom *</label>
                 <input type="text" value={prenom} onChange={e => setPrenom(e.target.value)} placeholder="Marie"
-                  style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: '6px', padding: '8px 12px', fontSize: '14px', boxSizing: 'border-box' }} />
+                  style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: '8px', padding: '9px 12px', fontSize: '14px', boxSizing: 'border-box' }} />
               </div>
               <div>
-                <label style={{ display: 'block', fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>Nom *</label>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#6b7280', marginBottom: '4px' }}>Nom *</label>
                 <input type="text" value={nom} onChange={e => setNom(e.target.value)} placeholder="Dubois"
-                  style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: '6px', padding: '8px 12px', fontSize: '14px', boxSizing: 'border-box' }} />
+                  style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: '8px', padding: '9px 12px', fontSize: '14px', boxSizing: 'border-box' }} />
               </div>
             </div>
             <div style={{ marginBottom: '12px' }}>
-              <label style={{ display: 'block', fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>Email *</label>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#6b7280', marginBottom: '4px' }}>Email *</label>
               <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="marie@exemple.be"
-                style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: '6px', padding: '8px 12px', fontSize: '14px', boxSizing: 'border-box' }} />
+                style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: '8px', padding: '9px 12px', fontSize: '14px', boxSizing: 'border-box' }} />
             </div>
             <div style={{ marginBottom: '12px' }}>
-              <label style={{ display: 'block', fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>Téléphone *</label>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#6b7280', marginBottom: '4px' }}>Téléphone *</label>
               <input type="tel" value={telephone} onChange={e => setTelephone(e.target.value)} placeholder="0471 12 34 56"
-                style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: '6px', padding: '8px 12px', fontSize: '14px', boxSizing: 'border-box' }} />
+                style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: '8px', padding: '9px 12px', fontSize: '14px', boxSizing: 'border-box' }} />
             </div>
             <div>
-              <label style={{ display: 'block', fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>Notes (optionnel)</label>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#6b7280', marginBottom: '4px' }}>Notes (optionnel)</label>
               <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Ex: sans gluten, tranche fin..." rows={2}
-                style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: '6px', padding: '8px 12px', fontSize: '14px', boxSizing: 'border-box', resize: 'none' }} />
+                style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: '8px', padding: '9px 12px', fontSize: '14px', boxSizing: 'border-box', resize: 'none' }} />
             </div>
           </div>
 
+          {/* Option créer un compte (si non connecté) */}
+          {!clientConnecte && (
+            <div style={{ backgroundColor: 'white', borderRadius: '12px', border: `1px solid ${creerCompte ? '#7CBF3A' : '#e5e7eb'}`, overflow: 'hidden', marginBottom: '16px' }}>
+              <div
+                onClick={() => { setCreerCompte(!creerCompte); setErreurCompte('') }}
+                style={{ padding: '14px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', background: creerCompte ? '#f0fdf4' : '#fafafa' }}>
+                <div style={{ width: '20px', height: '20px', borderRadius: '4px', border: `2px solid ${creerCompte ? '#7CBF3A' : '#d1d5db'}`, background: creerCompte ? '#7CBF3A' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  {creerCompte && <span style={{ color: '#1C2B1A', fontWeight: 900, fontSize: '13px', lineHeight: 1 }}>✓</span>}
+                </div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '13px', color: creerCompte ? '#166534' : '#374151' }}>
+                    ✨ Créer mon compte en même temps
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                    Suivez vos commandes, accédez à votre historique, suspendez vos abonnements
+                  </div>
+                </div>
+              </div>
+
+              {creerCompte && (
+                <div style={{ padding: '0 16px 16px', borderTop: '1px solid #e5e7eb' }}>
+                  {erreurCompte && (
+                    <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#b91c1c', padding: '8px 12px', borderRadius: '6px', margin: '12px 0 8px', fontSize: '12px' }}>
+                      {erreurCompte}
+                    </div>
+                  )}
+                  <div style={{ marginTop: '12px', marginBottom: '10px' }}>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#6b7280', marginBottom: '4px' }}>Mot de passe *</label>
+                    <input type="password" value={mdpCompte} onChange={e => setMdpCompte(e.target.value)} placeholder="Min. 8 caractères"
+                      style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: '8px', padding: '9px 12px', fontSize: '14px', boxSizing: 'border-box' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#6b7280', marginBottom: '4px' }}>Confirmer le mot de passe *</label>
+                    <input type="password" value={mdpConfirm} onChange={e => setMdpConfirm(e.target.value)} placeholder="••••••••"
+                      style={{ width: '100%', border: `1px solid ${mdpConfirm && mdpConfirm !== mdpCompte ? '#fca5a5' : '#d1d5db'}`, borderRadius: '8px', padding: '9px 12px', fontSize: '14px', boxSizing: 'border-box' }} />
+                    {mdpConfirm && mdpConfirm !== mdpCompte && (
+                      <p style={{ fontSize: '11px', color: '#ef4444', margin: '4px 0 0' }}>Les mots de passe ne correspondent pas</p>
+                    )}
+                  </div>
+                  <p style={{ fontSize: '11px', color: '#6b7280', margin: '10px 0 0' }}>
+                    📧 Un email de confirmation vous sera envoyé après la commande.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Bouton confirmer */}
           <button
             onClick={passerCommande}
-            disabled={loading || !nom || !prenom || !email || !telephone}
-            style={{ width: '100%', backgroundColor: (!nom || !prenom || !email || !telephone) ? '#9ca3af' : '#1C2B1A', color: '#7CBF3A', border: 'none', borderRadius: '12px', padding: '16px', fontSize: '15px', fontWeight: 'bold', cursor: (!nom || !prenom || !email || !telephone) ? 'not-allowed' : 'pointer' }}>
-            {loading ? 'Envoi en cours...' : recurrente ? `🔄 Activer ma commande récurrente — ${total.toFixed(2)} € / sem.` : `✓ Confirmer ma commande — ${total.toFixed(2)} €`}
+            disabled={loading || !nom || !prenom || !email || !telephone || (creerCompte && (!mdpCompte || mdpCompte !== mdpConfirm || mdpCompte.length < 8))}
+            style={{
+              width: '100%',
+              backgroundColor: (!nom || !prenom || !email || !telephone) ? '#9ca3af' : '#1C2B1A',
+              color: '#7CBF3A', border: 'none', borderRadius: '12px', padding: '16px',
+              fontSize: '15px', fontWeight: 'bold',
+              cursor: (!nom || !prenom || !email || !telephone) ? 'not-allowed' : 'pointer'
+            }}>
+            {loading ? 'Envoi en cours…' : recurrente ? `🔄 Activer ma commande récurrente — ${total.toFixed(2)} € / sem.` : `✓ Confirmer ma commande — ${total.toFixed(2)} €`}
           </button>
 
           <p style={{ textAlign: 'center', fontSize: '12px', color: '#9ca3af', marginTop: '12px' }}>
