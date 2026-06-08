@@ -69,6 +69,11 @@ export default function CommandesPage() {
   }
 
   // ── Changer statut avec logique métier ───────────────────────────────────────
+  async function activerRecurrence(commandeId: string) {
+    await supabase.from('commandes').update({ recurence_validee: true, statut: 'confirmee' }).eq('id', commandeId)
+    chargerCommandes()
+  }
+
   async function changerStatut(commandeId: string, nouveauStatut: string) {
     const commande = commandes.find(c => c.id === commandeId)
     if (!commande) return
@@ -271,6 +276,19 @@ export default function CommandesPage() {
 
                   {/* Actions */}
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
+                    {/* Bouton activer récurrence */}
+                    {c.type === 'recurrente' && !c.recurence_validee && c.statut !== 'annulee' && (
+                      <button
+                        onClick={e => { e.stopPropagation(); activerRecurrence(c.id) }}
+                        style={{ background: '#0369a1', color: 'white', border: 'none', borderRadius: '8px', padding: '7px 12px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        🔄 Activer récurrence
+                      </button>
+                    )}
+                    {c.type === 'recurrente' && c.recurence_validee && (
+                      <span style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '999px', background: '#e0f2fe', color: '#0369a1', border: '1px solid #7dd3fc', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        🔄 Récurrence active
+                      </span>
+                    )}
                     {/* Bouton récupérée (raccourci direct) */}
                     {c.statut !== 'recuperee' && c.statut !== 'annulee' && (
                       <button
@@ -305,6 +323,19 @@ export default function CommandesPage() {
                 {/* Panneau détail étendu */}
                 {ouvert && (
                   <div style={{ borderTop: '1px solid #e5e7eb', padding: '16px', background: 'white' }}>
+                    {/* Alerte récurrence en attente */}
+                    {c.type === 'recurrente' && !c.recurence_validee && c.statut !== 'annulee' && (
+                      <div style={{ background: '#eff6ff', border: '1px solid #93c5fd', borderRadius: '10px', padding: '12px 16px', marginBottom: '14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                        <div>
+                          <p style={{ fontWeight: 700, color: '#1d4ed8', fontSize: '13px', margin: '0 0 2px' }}>🔄 Abonnement hebdomadaire en attente d'activation</p>
+                          <p style={{ fontSize: '12px', color: '#3b82f6', margin: 0 }}>Le client attend votre validation pour que sa commande récurrente démarre.</p>
+                        </div>
+                        <button onClick={() => activerRecurrence(c.id)}
+                          style={{ background: '#1d4ed8', color: 'white', border: 'none', borderRadius: '8px', padding: '9px 16px', fontSize: '13px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                          ✓ Activer l'abonnement
+                        </button>
+                      </div>
+                    )}
                     <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
 
                       {/* Détail produits + total */}
