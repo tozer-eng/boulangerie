@@ -106,41 +106,49 @@ export default function ComptePage() {
   useEffect(() => { chargerCompte() }, [])
 
   async function chargerCompte() {
-    const { data: { user }, error } = await supabase.auth.getUser()
-    if (error || !user) { router.push('/client/auth/connexion'); return }
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser()
+      if (error || !user) { router.push('/client/auth/connexion'); return }
 
-    // Chercher / lier la fiche client
-    let { data: clientData } = await supabase.from('clients').select('*').eq('user_id', user.id).single()
+      // Chercher / lier la fiche client
+      let { data: clientData } = await supabase
+        .from('clients').select('*').eq('user_id', user.id).maybeSingle()
 
-    if (!clientData) {
-      const { data: parEmail } = await supabase.from('clients').select('*').eq('email', user.email!).single()
-      if (parEmail) {
-        await supabase.from('clients').update({ user_id: user.id }).eq('id', parEmail.id)
-        clientData = { ...parEmail, user_id: user.id }
-      } else {
-        const { data: nouveau } = await supabase.from('clients').insert({
-          user_id: user.id,
-          nom: user.user_metadata?.nom ?? '',
-          prenom: user.user_metadata?.prenom ?? '',
-          email: user.email!,
-          telephone: user.user_metadata?.telephone ?? '',
-          statut: 'nouveau', actif: true,
-        }).select('*').single()
-        clientData = nouveau
+      if (!clientData) {
+        const { data: parEmail } = await supabase
+          .from('clients').select('*').eq('email', user.email!).maybeSingle()
+        if (parEmail) {
+          await supabase.from('clients').update({ user_id: user.id }).eq('id', parEmail.id)
+          clientData = { ...parEmail, user_id: user.id }
+        } else {
+          const { data: nouveau } = await supabase.from('clients').insert({
+            user_id: user.id,
+            nom: user.user_metadata?.nom ?? '',
+            prenom: user.user_metadata?.prenom ?? '',
+            email: user.email!,
+            telephone: user.user_metadata?.telephone ?? '',
+            statut: 'nouveau', actif: true,
+          }).select('*').single()
+          clientData = nouveau
+        }
       }
+
+      if (!clientData) { router.push('/client/auth/connexion'); return }
+
+      const { data: commandesData } = await supabase
+        .from('commandes')
+        .select('*, lignes:lignes_commande(*, produit:produits(nom, prix))')
+        .eq('client_id', clientData.id)
+        .order('created_at', { ascending: false })
+
+      setClient(clientData)
+      setCommandes(commandesData ?? [])
+    } catch (err) {
+      console.error('Erreur chargement compte:', err)
+      router.push('/client/auth/connexion')
+    } finally {
+      setLoading(false)
     }
-
-    if (!clientData) { router.push('/client/auth/connexion'); return }
-
-    const { data: commandesData } = await supabase
-      .from('commandes')
-      .select('*, lignes:lignes_commande(*, produit:produits(nom, prix))')
-      .eq('client_id', clientData.id)
-      .order('created_at', { ascending: false })
-
-    setClient(clientData)
-    setCommandes(commandesData ?? [])
-    setLoading(false)
   }
 
   async function seDeconnecter() {
@@ -161,13 +169,24 @@ export default function ComptePage() {
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '80px 16px', color: '#9ca3af' }}>
-        <div style={{ fontSize: '36px', marginBottom: '12px' }}>🥖</div>
-        Chargement de votre espace…
+        <div style={{ fontSize: '36px', marginBottom: '12px', animation: 'pulse 1.5s infinite' }}>🥖</div>
+        <p style={{ margin: 0 }}>Chargement de votre espace…</p>
       </div>
     )
   }
 
-  if (!client) return null
+  // Non connecté — la redirection est en cours
+  if (!client) {
+    return (
+      <div style={{ textAlign: 'center', padding: '80px 16px' }}>
+        <p style={{ color: '#9ca3af', marginBottom: '16px' }}>Vous devez être connecté pour accéder à votre espace.</p>
+        <a href="/client/auth/connexion"
+          style={{ backgroundColor: '#1C2B1A', color: '#7CBF3A', padding: '10px 24px', borderRadius: '10px', textDecoration: 'none', fontWeight: 'bold', fontSize: '14px' }}>
+          Se connecter
+        </a>
+      </div>
+    )
+  }
 
   const statutInfo     = STATUT_CLIENT[client.statut] ?? STATUT_CLIENT['nouveau']
   const recurrentes    = commandes.filter(c => c.type === 'recurrente' && c.statut !== 'annulee')
