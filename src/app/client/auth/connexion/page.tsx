@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Suspense } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
@@ -38,6 +38,14 @@ function forceMdp(mdp: string): { score: number; label: string; color: string } 
 // ─── Page principale ──────────────────────────────────────────────────────────
 
 export default function ConnexionPage() {
+  return (
+    <Suspense fallback={<div style={{ textAlign: 'center', padding: '80px', color: '#9ca3af' }}>Chargement…</div>}>
+      <ConnexionContenu />
+    </Suspense>
+  )
+}
+
+function ConnexionContenu() {
   const [onglet, setOnglet]               = useState<'connexion' | 'inscription'>('connexion')
 
   // Connexion
