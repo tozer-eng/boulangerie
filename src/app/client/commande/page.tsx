@@ -238,7 +238,7 @@ export default function CommandePage() {
     // Charger fermetures + paramètres + statut client connecté en parallèle
     Promise.all([
       supabase.from('fermetures').select('id, type, date, jour_semaine'),
-      supabase.from('parametres').select('heure_blocage_semaine, heure_blocage_weekend').single(),
+      supabase.from('parametres').select('heure_blocage_semaine, heure_blocage_weekend').maybeSingle(),
       supabase.auth.getUser(),
     ]).then(async ([{ data: ferm }, { data: params }, { data: authData }]) => {
       const fermeturesList = (ferm ?? []) as Fermeture[]

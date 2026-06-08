@@ -118,7 +118,7 @@ function ConnexionContenu() {
     setLoadingIn(true)
 
     // Vérifier si email déjà utilisé
-    const { data: existant } = await supabase.from('clients').select('id').eq('email', emailIn).single()
+    const { data: existant } = await supabase.from('clients').select('id').eq('email', emailIn).maybeSingle()
     if (existant) {
       setErreurIn('Un compte existe déjà avec cet email. Connectez-vous.')
       setLoadingIn(false)

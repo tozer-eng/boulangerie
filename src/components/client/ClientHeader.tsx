@@ -20,7 +20,7 @@ export default function ClientHeader() {
           .from('clients')
           .select('prenom')
           .eq('user_id', user.id)
-          .single()
+          .maybeSingle()
         if (data) setPrenom(data.prenom)
       } else {
         setConnecte(false)
@@ -36,7 +36,7 @@ export default function ClientHeader() {
           .from('clients')
           .select('prenom')
           .eq('user_id', session.user.id)
-          .single()
+          .maybeSingle()
         if (data) setPrenom(data.prenom)
       } else {
         setConnecte(false)
